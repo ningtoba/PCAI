@@ -51,3 +51,6 @@ yarn.lock
 .serena
 # pmpm
 pnpm-lock.yaml
+
+# references
+/references
