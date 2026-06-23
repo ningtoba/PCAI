@@ -7,697 +7,207 @@ import { useBoolean, useGetState } from 'ahooks'
 import useConversation from '@/hooks/use-conversation'
 import Toast from '@/app/components/base/toast'
 import Sidebar from '@/app/components/sidebar'
-import ConfigSence from '@/app/components/config-scence'
-import Header from '@/app/components/header'
-import { fetchAppParams, fetchChatList, fetchConversations, generationConversationName, sendChatMessage, updateFeedback } from '@/service'
-import type { ChatItem, ConversationItem, Feedbacktype, PromptConfig, VisionFile, VisionSettings } from '@/types/app'
+import DocumentManagement from '@/app/components/document-panel/document-management'
+import { fetchAppParams, fetchChatList, fetchConversations, generationConversationName, sendChatMessage } from '@/service'
+import type { ChatItem, ConversationItem, PromptConfig, VisionFile, VisionSettings } from '@/types/app'
 import type { FileUpload } from '@/app/components/base/file-uploader-in-attachment/types'
 import { Resolution, TransferMethod, WorkflowRunningStatus } from '@/types/app'
 import Chat from '@/app/components/chat'
 import { setLocaleOnClient } from '@/i18n/client'
 import useBreakpoints, { MediaType } from '@/hooks/use-breakpoints'
 import Loading from '@/app/components/base/loading'
-import { replaceVarWithValues, userInputsFormToPromptVariables } from '@/utils/prompt'
 import AppUnavailable from '@/app/components/app-unavailable'
 import { API_KEY, APP_ID, APP_INFO, isShowPrompt, promptTemplate } from '@/config'
 import type { Annotation as AnnotationType } from '@/types/log'
 import { addFileInfos, sortAgentSorts } from '@/utils/tools'
 
-export interface IMainProps {
-  params: any
-}
+export interface IMainProps { params: any }
 
 const Main: FC<IMainProps> = () => {
   const { t } = useTranslation()
   const media = useBreakpoints()
   const isMobile = media === MediaType.mobile
   const hasSetAppConfig = APP_ID && API_KEY
-
-  /*
-  * app info
-  */
   const [appUnavailable, setAppUnavailable] = useState<boolean>(false)
   const [isUnknownReason, setIsUnknownReason] = useState<boolean>(false)
   const [promptConfig, setPromptConfig] = useState<PromptConfig | null>(null)
   const [inited, setInited] = useState<boolean>(false)
-  // in mobile, show sidebar by click button
-  const [isShowSidebar, { setTrue: showSidebar, setFalse: hideSidebar }] = useBoolean(false)
-  const [visionConfig, setVisionConfig] = useState<VisionSettings | undefined>({
-    enabled: false,
-    number_limits: 2,
-    detail: Resolution.low,
-    transfer_methods: [TransferMethod.local_file],
-  })
+  const [sidebarOpen, setSidebarOpen] = useState(!isMobile)
+  const [activeTab, setActiveTab] = useState<'chat' | 'documents'>('chat')
+  const [visionConfig, setVisionConfig] = useState<VisionSettings | undefined>({ enabled: false, number_limits: 2, detail: Resolution.low, transfer_methods: [TransferMethod.local_file] })
   const [fileConfig, setFileConfig] = useState<FileUpload | undefined>()
 
-  useEffect(() => {
-    if (APP_INFO?.title) { document.title = `${APP_INFO.title} - Powered by Dify` }
-  }, [APP_INFO?.title])
+  useEffect(() => { document.title = 'CTC RAG' }, [])
+  useEffect(() => { setAutoFreeze(false); return () => { setAutoFreeze(true) } }, [])
 
-  // onData change thought (the produce obj). https://github.com/immerjs/immer/issues/576
-  useEffect(() => {
-    setAutoFreeze(false)
-    return () => {
-      setAutoFreeze(true)
-    }
-  }, [])
-
-  /*
-  * conversation info
-  */
-  const {
-    conversationList,
-    setConversationList,
-    currConversationId,
-    getCurrConversationId,
-    setCurrConversationId,
-    getConversationIdFromStorage,
-    isNewConversation,
-    currConversationInfo,
-    currInputs,
-    newConversationInputs,
-    resetNewConversationInputs,
-    setCurrInputs,
-    setNewConversationInfo,
-    setExistConversationInfo,
-  } = useConversation()
-
-  const [conversationIdChangeBecauseOfNew, setConversationIdChangeBecauseOfNew, getConversationIdChangeBecauseOfNew] = useGetState(false)
-  const [isChatStarted, { setTrue: setChatStarted, setFalse: setChatNotStarted }] = useBoolean(false)
-  const handleStartChat = (inputs: Record<string, any>) => {
-    createNewChat()
-    setConversationIdChangeBecauseOfNew(true)
-    setCurrInputs(inputs)
-    setChatStarted()
-    // parse variables in introduction
-    setChatList(generateNewChatListWithOpenStatement('', inputs))
-  }
-  const hasSetInputs = (() => {
-    if (!isNewConversation) { return true }
-
-    return isChatStarted
-  })()
-
-  const conversationName = currConversationInfo?.name || t('app.chat.newChatDefaultName') as string
+  const { conversationList, setConversationList, currConversationId, getCurrConversationId, setCurrConversationId, getConversationIdFromStorage, isNewConversation, currConversationInfo, currInputs, setCurrInputs, setNewConversationInfo, setExistConversationInfo } = useConversation()
+  const [, setConversationIdChangeBecauseOfNew, getConversationIdChangeBecauseOfNew] = useGetState(false)
   const conversationIntroduction = currConversationInfo?.introduction || ''
   const suggestedQuestions = currConversationInfo?.suggested_questions || []
 
-  const handleConversationSwitch = () => {
+  const [isResponding, { setTrue: setRespondingTrue, setFalse: setRespondingFalse }] = useBoolean(false)
+  const { notify } = Toast
+
+  // Load chat history when conversation changes
+  useEffect(() => {
     if (!inited) { return }
-
-    // update inputs of current conversation
-    let notSyncToStateIntroduction = ''
-    let notSyncToStateInputs: Record<string, any> | undefined | null = {}
-    if (!isNewConversation) {
-      const item = conversationList.find(item => item.id === currConversationId)
-      notSyncToStateInputs = item?.inputs || {}
-      setCurrInputs(notSyncToStateInputs as any)
-      notSyncToStateIntroduction = item?.introduction || ''
-      setExistConversationInfo({
-        name: item?.name || '',
-        introduction: notSyncToStateIntroduction,
-        suggested_questions: suggestedQuestions,
-      })
-    }
-    else {
-      notSyncToStateInputs = newConversationInputs
-      setCurrInputs(notSyncToStateInputs)
-    }
-
-    // update chat list of current conversation
-    if (!isNewConversation && !conversationIdChangeBecauseOfNew && !isResponding) {
-      fetchChatList(currConversationId).then((res: any) => {
-        const { data } = res
-        const newChatList: ChatItem[] = generateNewChatListWithOpenStatement(notSyncToStateIntroduction, notSyncToStateInputs)
-
-        data.forEach((item: any) => {
-          newChatList.push({
-            id: `question-${item.id}`,
-            content: item.query,
-            isAnswer: false,
-            message_files: item.message_files?.filter((file: any) => file.belongs_to === 'user') || [],
-
-          })
-          newChatList.push({
-            id: item.id,
-            content: item.answer,
-            agent_thoughts: addFileInfos(item.agent_thoughts ? sortAgentSorts(item.agent_thoughts) : item.agent_thoughts, item.message_files),
-            feedback: item.feedback,
-            isAnswer: true,
-            message_files: item.message_files?.filter((file: any) => file.belongs_to === 'assistant') || [],
-          })
-        })
-        setChatList(newChatList)
-      })
-    }
-
-    if (isNewConversation && isChatStarted) { setChatList(generateNewChatListWithOpenStatement()) }
-  }
-  useEffect(handleConversationSwitch, [currConversationId, inited])
-
-  const handleConversationIdChange = (id: string) => {
-    if (id === '-1') {
-      createNewChat()
-      setConversationIdChangeBecauseOfNew(true)
-    }
-    else {
-      setConversationIdChangeBecauseOfNew(false)
-    }
-    // trigger handleConversationSwitch
-    setCurrConversationId(id, APP_ID)
-    hideSidebar()
-  }
-
-  /*
-  * chat info. chat is under conversation.
-  */
-  const [chatList, setChatList, getChatList] = useGetState<ChatItem[]>([])
-  const chatListDomRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    // scroll to bottom with page-level scrolling
-    if (chatListDomRef.current) {
-      setTimeout(() => {
-        chatListDomRef.current?.scrollIntoView({
-          behavior: 'auto',
-          block: 'end',
-        })
-      }, 50)
-    }
-  }, [chatList, currConversationId])
-  // user can not edit inputs if user had send message
-  const canEditInputs = !chatList.some(item => item.isAnswer === false) && isNewConversation
-  const createNewChat = () => {
-    // if new chat is already exist, do not create new chat
-    if (conversationList.some(item => item.id === '-1')) { return }
-
-    setConversationList(produce(conversationList, (draft) => {
-      draft.unshift({
-        id: '-1',
-        name: t('app.chat.newChatDefaultName'),
-        inputs: newConversationInputs,
-        introduction: conversationIntroduction,
-        suggested_questions: suggestedQuestions,
-      })
-    }))
-  }
-
-  // sometime introduction is not applied to state
-  const generateNewChatListWithOpenStatement = (introduction?: string, inputs?: Record<string, any> | null) => {
-    let calculatedIntroduction = introduction || conversationIntroduction || ''
-    const calculatedPromptVariables = inputs || currInputs || null
-    if (calculatedIntroduction && calculatedPromptVariables) { calculatedIntroduction = replaceVarWithValues(calculatedIntroduction, promptConfig?.prompt_variables || [], calculatedPromptVariables) }
-
-    const openStatement = {
-      id: `${Date.now()}`,
-      content: calculatedIntroduction,
-      isAnswer: true,
-      feedbackDisabled: true,
-      isOpeningStatement: isShowPrompt,
-      suggestedQuestions,
-    }
-    if (calculatedIntroduction) { return [openStatement] }
-
-    return []
-  }
-
-  // init
-  useEffect(() => {
-    if (!hasSetAppConfig) {
-      setAppUnavailable(true)
+    if (isNewConversation) {
+      setChatList(generateNewChatListWithOpenStatement())
       return
     }
+    if (!currConversationId || currConversationId === '-1') { return }
+    if (isResponding) { return }
+
+    const item = conversationList.find(i => i.id === currConversationId)
+    const inputs = item?.inputs || {}
+    const intro = item?.introduction || ''
+    setCurrInputs(inputs as any)
+    setExistConversationInfo({ name: item?.name || '', introduction: intro, suggested_questions: suggestedQuestions })
+
+    if (skipNextFetchRef.current) {
+      skipNextFetchRef.current = false
+      return
+    }
+
+    fetchChatList(currConversationId).then((res: any) => {
+      const list: ChatItem[] = generateNewChatListWithOpenStatement(intro, inputs)
+      res.data.forEach((item: any) => {
+        list.push({ id: `question-${item.id}`, content: item.query, isAnswer: false, message_files: item.message_files?.filter((f: any) => f.belongs_to === 'user') || [] })
+        list.push({ id: item.id, content: item.answer, agent_thoughts: addFileInfos(item.agent_thoughts ? sortAgentSorts(item.agent_thoughts) : item.agent_thoughts, item.message_files), feedback: item.feedback, isAnswer: true, message_files: item.message_files?.filter((f: any) => f.belongs_to === 'assistant') || [] })
+      })
+      setChatList(list)
+    })
+  }, [inited, currConversationId, isNewConversation, isResponding, conversationList, suggestedQuestions])
+
+  const handleConversationIdChange = (id: string) => {
+    if (id === '-1') { createNewChat(); setConversationIdChangeBecauseOfNew(true) } else { setConversationIdChangeBecauseOfNew(false) }
+    setCurrConversationId(id, APP_ID); setActiveTab('chat'); if (isMobile) { setSidebarOpen(false) }
+  }
+
+  const [chatList, setChatList, getChatList] = useGetState<ChatItem[]>([])
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const skipNextFetchRef = useRef(false)
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }
+
+  useEffect(() => { scrollToBottom() }, [chatList, currConversationId])
+
+  const createNewChat = () => { if (conversationList.some(i => i.id === '-1')) { return } setConversationList(produce(conversationList, (d) => { d.unshift({ id: '-1', name: t('app.chat.newChatDefaultName'), inputs: currInputs, introduction: conversationIntroduction, suggested_questions: suggestedQuestions }) })) }
+  const generateNewChatListWithOpenStatement = (introduction?: string, _inputs?: Record<string, any> | null) => { const intro = introduction || conversationIntroduction || ''; return intro ? [{ id: `${Date.now()}`, content: intro, isAnswer: true, feedbackDisabled: true, isOpeningStatement: isShowPrompt, suggestedQuestions }] : [] }
+
+  useEffect(() => {
+    if (!hasSetAppConfig) { setAppUnavailable(true); return }
     (async () => {
       try {
-        const [conversationData, appParams] = await Promise.all([fetchConversations(), fetchAppParams()])
-        // handle current conversation id
-        const { data: conversations, error } = conversationData as { data: ConversationItem[], error: string }
-        if (error) {
-          Toast.notify({ type: 'error', message: error })
-          throw new Error(error)
-          return
-        }
-        const _conversationId = getConversationIdFromStorage(APP_ID)
-        const currentConversation = conversations.find(item => item.id === _conversationId)
-        const isNotNewConversation = !!currentConversation
-
-        // fetch new conversation info
-        const { user_input_form, opening_statement: introduction, file_upload, system_parameters, suggested_questions = [] }: any = appParams
+        const [cd, ap] = await Promise.all([fetchConversations(), fetchAppParams()])
+        const { data: convs, error } = cd as { data: ConversationItem[], error: string }
+        if (error) { Toast.notify({ type: 'error', message: error }); throw new Error(error) }
+        const cid = getConversationIdFromStorage(APP_ID)
+        const cur = convs.find(i => i.id === cid)
+        const isExisting = !!cur
+        const { opening_statement: intro, file_upload, system_parameters, suggested_questions: sq = [] }: any = ap
         setLocaleOnClient(APP_INFO.default_language, true)
-        setNewConversationInfo({
-          name: t('app.chat.newChatDefaultName'),
-          introduction,
-          suggested_questions,
-        })
-        if (isNotNewConversation) {
-          setExistConversationInfo({
-            name: currentConversation.name || t('app.chat.newChatDefaultName'),
-            introduction,
-            suggested_questions,
+        setNewConversationInfo({ name: t('app.chat.newChatDefaultName'), introduction: intro, suggested_questions: sq })
+        if (isExisting) { setExistConversationInfo({ name: cur.name || t('app.chat.newChatDefaultName'), introduction: intro, suggested_questions: sq }) }
+        setPromptConfig({ prompt_template: promptTemplate, prompt_variables: [] } as PromptConfig)
+        const fe = !!file_upload?.enabled
+        setVisionConfig({ ...file_upload?.image, enabled: !!(fe && file_upload?.image?.enabled), image_file_size_limit: system_parameters?.system_parameters || 0 })
+        setFileConfig({ enabled: fe, allowed_file_types: file_upload?.allowed_file_types, allowed_file_extensions: file_upload?.allowed_file_extensions, allowed_file_upload_methods: file_upload?.allowed_file_upload_methods, number_limits: file_upload?.number_limits, fileUploadConfig: file_upload?.fileUploadConfig })
+        setConversationList(convs as ConversationItem[])
+        if (isExisting) {
+          setCurrConversationId(cid, APP_ID, false)
+          // Fetch chat history directly — bypass effect timing issues
+          fetchChatList(cid).then((res: any) => {
+            const list: ChatItem[] = intro ? [{ id: `${Date.now()}`, content: intro, isAnswer: true, feedbackDisabled: true, isOpeningStatement: isShowPrompt, suggestedQuestions: sq }] : []
+            res.data.forEach((item: any) => {
+              list.push({ id: `question-${item.id}`, content: item.query, isAnswer: false, message_files: item.message_files?.filter((f: any) => f.belongs_to === 'user') || [] })
+              list.push({ id: item.id, content: item.answer, agent_thoughts: addFileInfos(item.agent_thoughts ? sortAgentSorts(item.agent_thoughts) : item.agent_thoughts, item.message_files), feedback: item.feedback, isAnswer: true, message_files: item.message_files?.filter((f: any) => f.belongs_to === 'assistant') || [] })
+            })
+            setChatList(list)
           })
-        }
-        const prompt_variables = userInputsFormToPromptVariables(user_input_form)
-        setPromptConfig({
-          prompt_template: promptTemplate,
-          prompt_variables,
-        } as PromptConfig)
-        const outerFileUploadEnabled = !!file_upload?.enabled
-        setVisionConfig({
-          ...file_upload?.image,
-          enabled: !!(outerFileUploadEnabled && file_upload?.image?.enabled),
-          image_file_size_limit: system_parameters?.system_parameters || 0,
-        })
-        setFileConfig({
-          enabled: outerFileUploadEnabled,
-          allowed_file_types: file_upload?.allowed_file_types,
-          allowed_file_extensions: file_upload?.allowed_file_extensions,
-          allowed_file_upload_methods: file_upload?.allowed_file_upload_methods,
-          number_limits: file_upload?.number_limits,
-          fileUploadConfig: file_upload?.fileUploadConfig,
-        })
-        setConversationList(conversations as ConversationItem[])
-
-        if (isNotNewConversation) { setCurrConversationId(_conversationId, APP_ID, false) }
-
+        } else { createNewChat(); setConversationIdChangeBecauseOfNew(true) }
         setInited(true)
-      }
-      catch (e: any) {
-        if (e.status === 404) {
-          setAppUnavailable(true)
-        }
-        else {
-          setIsUnknownReason(true)
-          setAppUnavailable(true)
-        }
-      }
+      } catch (e: any) { if (e.status === 404) { setAppUnavailable(true) } else { setIsUnknownReason(true); setAppUnavailable(true) } }
     })()
   }, [])
 
-  const [isResponding, { setTrue: setRespondingTrue, setFalse: setRespondingFalse }] = useBoolean(false)
-  const [abortController, setAbortController] = useState<AbortController | null>(null)
-  const { notify } = Toast
-  const logError = (message: string) => {
-    notify({ type: 'error', message })
-  }
-
-  const checkCanSend = () => {
-    if (currConversationId !== '-1') { return true }
-
-    if (!currInputs || !promptConfig?.prompt_variables) { return true }
-
-    let emptyRequiredInput = false
-    promptConfig.prompt_variables.forEach((item) => {
-      if (item.required && !currInputs[item.key])
-        emptyRequiredInput = true
-    })
-
-    if (emptyRequiredInput) {
-      logError(t('app.errorMessage.valueOfVarRequired'))
-      return false
-    }
-    return true
-  }
-
-  const [controlFocus, setControlFocus] = useState(0)
-  const [openingSuggestedQuestions, setOpeningSuggestedQuestions] = useState<string[]>([])
-  const [messageTaskId, setMessageTaskId] = useState('')
-  const [hasStopResponded, setHasStopResponded, getHasStopResponded] = useGetState(false)
-  const [isRespondingConIsCurrCon, setIsRespondingConCurrCon, getIsRespondingConIsCurrCon] = useGetState(true)
-  const [userQuery, setUserQuery] = useState('')
-
-  const updateCurrentQA = ({
-    responseItem,
-    questionId,
-    placeholderAnswerId,
-    questionItem,
-  }: {
-    responseItem: ChatItem
-    questionId: string
-    placeholderAnswerId: string
-    questionItem: ChatItem
-  }) => {
-    // closesure new list is outdated.
-    const newListWithAnswer = produce(
-      getChatList().filter(item => item.id !== responseItem.id && item.id !== placeholderAnswerId),
-      (draft) => {
-        if (!draft.find(item => item.id === questionId)) { draft.push({ ...questionItem }) }
-
-        draft.push({ ...responseItem })
-      },
-    )
-    setChatList(newListWithAnswer)
-  }
-
-  const transformToServerFile = (fileItem: any) => {
-    return {
-      type: 'image',
-      transfer_method: fileItem.transferMethod,
-      url: fileItem.url,
-      upload_file_id: fileItem.id,
-    }
-  }
+  const updateQA = ({ ri, qi, pi, qi2 }: { ri: ChatItem, qi: string, pi: string, qi2: ChatItem }) => { setChatList(produce(getChatList().filter(i => i.id !== ri.id && i.id !== pi), (d) => { if (!d.find(i => i.id === qi)) { d.push({ ...qi2 }) } d.push({ ...ri }) })) }
 
   const handleSend = async (message: string, files?: VisionFile[]) => {
-    if (isResponding) {
-      notify({ type: 'info', message: t('app.errorMessage.waitForResponse') })
-      return
-    }
-    const toServerInputs: Record<string, any> = {}
-    if (currInputs) {
-      Object.keys(currInputs).forEach((key) => {
-        const value = currInputs[key]
-        if (value.supportFileType) { toServerInputs[key] = transformToServerFile(value) }
-
-        else if (value[0]?.supportFileType) { toServerInputs[key] = value.map((item: any) => transformToServerFile(item)) }
-
-        else { toServerInputs[key] = value }
-      })
-    }
-
-    const data: Record<string, any> = {
-      inputs: toServerInputs,
-      query: message,
-      conversation_id: isNewConversation ? null : currConversationId,
-    }
-
-    if (files && files?.length > 0) {
-      data.files = files.map((item) => {
-        if (item.transfer_method === TransferMethod.local_file) {
-          return {
-            ...item,
-            url: '',
-          }
-        }
-        return item
-      })
-    }
-
-    // question
-    const questionId = `question-${Date.now()}`
-    const questionItem = {
-      id: questionId,
-      content: message,
-      isAnswer: false,
-      message_files: (files || []).filter((f: any) => f.type === 'image'),
-    }
-
-    const placeholderAnswerId = `answer-placeholder-${Date.now()}`
-    const placeholderAnswerItem = {
-      id: placeholderAnswerId,
-      content: '',
-      isAnswer: true,
-    }
-
-    const newList = [...getChatList(), questionItem, placeholderAnswerItem]
-    setChatList(newList)
-
-    let isAgentMode = false
-
-    // answer
-    const responseItem: ChatItem = {
-      id: `${Date.now()}`,
-      content: '',
-      agent_thoughts: [],
-      message_files: [],
-      isAnswer: true,
-    }
-    let hasSetResponseId = false
-
-    const prevTempNewConversationId = getCurrConversationId() || '-1'
-    let tempNewConversationId = ''
-
+    if (isResponding) { notify({ type: 'info', message: t('app.errorMessage.waitForResponse') }); return }
+    const si: Record<string, any> = {}
+    if (currInputs) { Object.keys(currInputs).forEach((k) => { const v = currInputs[k]; if (v?.supportFileType) { si[k] = { type: 'image', transfer_method: v.transferMethod, url: v.url, upload_file_id: v.id } } else if (v?.[0]?.supportFileType) { si[k] = v.map((x: any) => ({ type: 'image', transfer_method: x.transferMethod, url: x.url, upload_file_id: x.id })) } else { si[k] = v } }) }
+    const data: Record<string, any> = { inputs: si, query: message, conversation_id: isNewConversation ? null : currConversationId }
+    if (files?.length) { data.files = files.map(f => f.transfer_method === TransferMethod.local_file ? { ...f, url: '' } : f) }
+    const qid = `question-${Date.now()}`; const qi = { id: qid, content: message, isAnswer: false, message_files: (files || []).filter((f: any) => f.type === 'image') }
+    const pid = `answer-placeholder-${Date.now()}`; setChatList([...getChatList(), qi, { id: pid, content: '', isAnswer: true }])
+    let isAgent = false; const ri: ChatItem = { id: `${Date.now()}`, content: '', agent_thoughts: [], message_files: [], isAnswer: true }; let hasId = false
+    const prevCid = getCurrConversationId() || '-1'; let newCid = ''
     setRespondingTrue()
     sendChatMessage(data, {
-      getAbortController: (abortController) => {
-        setAbortController(abortController)
-      },
-      onData: (message: string, isFirstMessage: boolean, { conversationId: newConversationId, messageId, taskId }: any) => {
-        if (!isAgentMode) {
-          responseItem.content = responseItem.content + message
-        }
-        else {
-          const lastThought = responseItem.agent_thoughts?.[responseItem.agent_thoughts?.length - 1]
-          if (lastThought) { lastThought.thought = lastThought.thought + message } // need immer setAutoFreeze
-        }
-        if (messageId && !hasSetResponseId) {
-          responseItem.id = messageId
-          hasSetResponseId = true
-        }
-
-        if (isFirstMessage && newConversationId) { tempNewConversationId = newConversationId }
-
-        setMessageTaskId(taskId)
-        // has switched to other conversation
-        if (prevTempNewConversationId !== getCurrConversationId()) {
-          setIsRespondingConCurrCon(false)
-          return
-        }
-        updateCurrentQA({
-          responseItem,
-          questionId,
-          placeholderAnswerId,
-          questionItem,
-        })
-      },
-      async onCompleted(hasError?: boolean) {
-        if (hasError) { return }
-
-        if (getConversationIdChangeBecauseOfNew()) {
-          const { data: allConversations }: any = await fetchConversations()
-          const newItem: any = await generationConversationName(allConversations[0].id)
-
-          const newAllConversations = produce(allConversations, (draft: any) => {
-            draft[0].name = newItem.name
-          })
-          setConversationList(newAllConversations as any)
-        }
-        setConversationIdChangeBecauseOfNew(false)
-        resetNewConversationInputs()
-        setChatNotStarted()
-        setCurrConversationId(tempNewConversationId, APP_ID, true)
-        setRespondingFalse()
-      },
-      onFile(file) {
-        const lastThought = responseItem.agent_thoughts?.[responseItem.agent_thoughts?.length - 1]
-        if (lastThought) { lastThought.message_files = [...(lastThought as any).message_files, { ...file }] }
-
-        updateCurrentQA({
-          responseItem,
-          questionId,
-          placeholderAnswerId,
-          questionItem,
-        })
-      },
-      onThought(thought) {
-        isAgentMode = true
-        const response = responseItem as any
-        if (thought.message_id && !hasSetResponseId) {
-          response.id = thought.message_id
-          hasSetResponseId = true
-        }
-        // responseItem.id = thought.message_id;
-        if (response.agent_thoughts.length === 0) {
-          response.agent_thoughts.push(thought)
-        }
-        else {
-          const lastThought = response.agent_thoughts[response.agent_thoughts.length - 1]
-          // thought changed but still the same thought, so update.
-          if (lastThought.id === thought.id) {
-            thought.thought = lastThought.thought
-            thought.message_files = lastThought.message_files
-            responseItem.agent_thoughts![response.agent_thoughts.length - 1] = thought
-          }
-          else {
-            responseItem.agent_thoughts!.push(thought)
-          }
-        }
-        // has switched to other conversation
-        if (prevTempNewConversationId !== getCurrConversationId()) {
-          setIsRespondingConCurrCon(false)
-          return false
-        }
-
-        updateCurrentQA({
-          responseItem,
-          questionId,
-          placeholderAnswerId,
-          questionItem,
-        })
-      },
-      onMessageEnd: (messageEnd) => {
-        if (messageEnd.metadata?.annotation_reply) {
-          responseItem.id = messageEnd.id
-          responseItem.annotation = ({
-            id: messageEnd.metadata.annotation_reply.id,
-            authorName: messageEnd.metadata.annotation_reply.account.name,
-          } as AnnotationType)
-          const newListWithAnswer = produce(
-            getChatList().filter(item => item.id !== responseItem.id && item.id !== placeholderAnswerId),
-            (draft) => {
-              if (!draft.find(item => item.id === questionId)) { draft.push({ ...questionItem }) }
-
-              draft.push({
-                ...responseItem,
-              })
-            },
-          )
-          setChatList(newListWithAnswer)
-          return
-        }
-        // not support show citation
-        // responseItem.citation = messageEnd.retriever_resources
-        const newListWithAnswer = produce(
-          getChatList().filter(item => item.id !== responseItem.id && item.id !== placeholderAnswerId),
-          (draft) => {
-            if (!draft.find(item => item.id === questionId)) { draft.push({ ...questionItem }) }
-
-            draft.push({ ...responseItem })
-          },
-        )
-        setChatList(newListWithAnswer)
-      },
-      onMessageReplace: (messageReplace) => {
-        setChatList(produce(
-          getChatList(),
-          (draft) => {
-            const current = draft.find(item => item.id === messageReplace.id)
-
-            if (current) { current.content = messageReplace.answer }
-          },
-        ))
-      },
-      onError() {
-        setRespondingFalse()
-        // role back placeholder answer
-        setChatList(produce(getChatList(), (draft) => {
-          draft.splice(draft.findIndex(item => item.id === placeholderAnswerId), 1)
-        }))
-      },
-      onWorkflowStarted: ({ workflow_run_id, task_id }) => {
-        // taskIdRef.current = task_id
-        responseItem.workflow_run_id = workflow_run_id
-        responseItem.workflowProcess = {
-          status: WorkflowRunningStatus.Running,
-          tracing: [],
-        }
-        setChatList(produce(getChatList(), (draft) => {
-          const currentIndex = draft.findIndex(item => item.id === responseItem.id)
-          draft[currentIndex] = {
-            ...draft[currentIndex],
-            ...responseItem,
-          }
-        }))
-      },
-      onWorkflowFinished: ({ data }) => {
-        responseItem.workflowProcess!.status = data.status as WorkflowRunningStatus
-        setChatList(produce(getChatList(), (draft) => {
-          const currentIndex = draft.findIndex(item => item.id === responseItem.id)
-          draft[currentIndex] = {
-            ...draft[currentIndex],
-            ...responseItem,
-          }
-        }))
-      },
-      onNodeStarted: ({ data }) => {
-        responseItem.workflowProcess!.tracing!.push(data as any)
-        setChatList(produce(getChatList(), (draft) => {
-          const currentIndex = draft.findIndex(item => item.id === responseItem.id)
-          draft[currentIndex] = {
-            ...draft[currentIndex],
-            ...responseItem,
-          }
-        }))
-      },
-      onNodeFinished: ({ data }) => {
-        const currentIndex = responseItem.workflowProcess!.tracing!.findIndex(item => item.node_id === data.node_id)
-        responseItem.workflowProcess!.tracing[currentIndex] = data as any
-        setChatList(produce(getChatList(), (draft) => {
-          const currentIndex = draft.findIndex(item => item.id === responseItem.id)
-          draft[currentIndex] = {
-            ...draft[currentIndex],
-            ...responseItem,
-          }
-        }))
-      },
+      getAbortController: () => {},
+      onData: (msg, isFirst, { conversationId: cid, messageId }: any) => { if (!isAgent) { ri.content += msg } else { const lt = ri.agent_thoughts?.[ri.agent_thoughts.length - 1]; if (lt) { lt.thought += msg } }; if (messageId && !hasId) { ri.id = messageId; hasId = true }; if (isFirst && cid) { newCid = cid } if (prevCid !== getCurrConversationId()) { return } updateQA({ ri, qi: qid, pi: pid, qi2: qi }) },
+      async onCompleted(hasErr) { if (hasErr) { return } if (getConversationIdChangeBecauseOfNew()) { const { data: ac }: any = await fetchConversations(); const n: any = await generationConversationName(ac[0].id); setConversationList(produce(ac, (d: any) => { d[0].name = n.name })) }; skipNextFetchRef.current = true; setCurrConversationId(newCid, APP_ID, true); setRespondingFalse() },
+      onFile(file) { const lt = ri.agent_thoughts?.[ri.agent_thoughts.length - 1]; if (lt) { lt.message_files = [...(lt as any).message_files, { ...file }] } updateQA({ ri, qi: qid, pi: pid, qi2: qi }) },
+      onThought(th) { isAgent = true; const r = ri as any; if (th.message_id && !hasId) { r.id = th.message_id; hasId = true }; if (!r.agent_thoughts.length) { r.agent_thoughts.push(th) } else { const lt = r.agent_thoughts[r.agent_thoughts.length - 1]; if (lt.id === th.id) { th.thought = lt.thought; th.message_files = lt.message_files; ri.agent_thoughts![ri.agent_thoughts.length - 1] = th } else { ri.agent_thoughts!.push(th) } }; if (prevCid !== getCurrConversationId()) { return false } updateQA({ ri, qi: qid, pi: pid, qi2: qi }) },
+      onMessageEnd: (me) => { if (me.metadata?.annotation_reply) { ri.annotation = ({ id: me.metadata.annotation_reply.id, authorName: me.metadata.annotation_reply.account.name } as AnnotationType) } setChatList(produce(getChatList().filter(i => i.id !== ri.id && i.id !== pid), (d) => { if (!d.find(i => i.id === qid)) { d.push({ ...qi }) } d.push({ ...ri }) })) },
+      onMessageReplace: (mr) => { setChatList(produce(getChatList(), (d) => { const c = d.find(i => i.id === mr.id); if (c) { c.content = mr.answer } })) },
+      onError() { setRespondingFalse(); setChatList(produce(getChatList(), (d) => { d.splice(d.findIndex(i => i.id === pid), 1) })) },
+      onWorkflowStarted: ({ workflow_run_id }) => { ri.workflow_run_id = workflow_run_id; ri.workflowProcess = { status: WorkflowRunningStatus.Running, tracing: [] }; setChatList(produce(getChatList(), (d) => { const i = d.findIndex(x => x.id === ri.id); d[i] = { ...d[i], ...ri } })) },
+      onWorkflowFinished: ({ data: d }) => { ri.workflowProcess!.status = d.status as WorkflowRunningStatus; setChatList(produce(getChatList(), (d) => { const i = d.findIndex(x => x.id === ri.id); d[i] = { ...d[i], ...ri } })) },
+      onNodeStarted: ({ data: d }) => { ri.workflowProcess!.tracing!.push(d as any); setChatList(produce(getChatList(), (d) => { const i = d.findIndex(x => x.id === ri.id); d[i] = { ...d[i], ...ri } })) },
+      onNodeFinished: ({ data: d }) => { const ci = ri.workflowProcess!.tracing!.findIndex(x => x.node_id === d.node_id); ri.workflowProcess!.tracing[ci] = d as any; setChatList(produce(getChatList(), (d) => { const i = d.findIndex(x => x.id === ri.id); d[i] = { ...d[i], ...ri } })) },
     })
-  }
-
-  const handleFeedback = async (messageId: string, feedback: Feedbacktype) => {
-    await updateFeedback({ url: `/messages/${messageId}/feedbacks`, body: { rating: feedback.rating } })
-    const newChatList = chatList.map((item) => {
-      if (item.id === messageId) {
-        return {
-          ...item,
-          feedback,
-        }
-      }
-      return item
-    })
-    setChatList(newChatList)
-    notify({ type: 'success', message: t('common.api.success') })
-  }
-
-  const renderSidebar = () => {
-    if (!APP_ID || !APP_INFO || !promptConfig) { return null }
-    return (
-      <Sidebar
-        list={conversationList}
-        onCurrentIdChange={handleConversationIdChange}
-        currentId={currConversationId}
-        copyRight={APP_INFO.copyright || APP_INFO.title}
-      />
-    )
   }
 
   if (appUnavailable) { return <AppUnavailable isUnknownReason={isUnknownReason} errMessage={!hasSetAppConfig ? 'Please set APP_ID and API_KEY in config/index.tsx' : ''} /> }
-
   if (!APP_ID || !APP_INFO || !promptConfig) { return <Loading type='app' /> }
 
   return (
-    <div className='bg-gray-100'>
-      <Header
-        title={APP_INFO.title}
-        isMobile={isMobile}
-        onShowSideBar={showSidebar}
-        onCreateNewChat={() => handleConversationIdChange('-1')}
-      />
-      <div className="flex rounded-t-2xl bg-white overflow-hidden">
-        {/* sidebar */}
-        {!isMobile && renderSidebar()}
-        {isMobile && isShowSidebar && (
-          <div className='fixed inset-0 z-50' style={{ backgroundColor: 'rgba(35, 56, 118, 0.2)' }} onClick={hideSidebar} >
-            <div className='inline-block' onClick={e => e.stopPropagation()}>
-              {renderSidebar()}
-            </div>
+    <div className="flex h-screen bg-dify-body">
+      {/* Sidebar — overlay on mobile, inline on desktop */}
+      {isMobile && sidebarOpen && (
+        <div className="fixed inset-0 z-50 flex">
+          <div className="fixed inset-0 bg-black/50" onClick={() => setSidebarOpen(false)} />
+          <div className="relative w-[260px] bg-gradient-to-b from-[#222225E6] to-[#1D1D20E6] border-r border-dify-border-section">
+            <Sidebar list={conversationList} onCurrentIdChange={handleConversationIdChange} currentId={currConversationId} />
           </div>
-        )}
-        {/* main */}
-        <div className='flex-grow flex flex-col h-[calc(100vh_-_3rem)] overflow-y-auto'>
-          <ConfigSence
-            conversationName={conversationName}
-            hasSetInputs={hasSetInputs}
-            isPublicVersion={isShowPrompt}
-            siteInfo={APP_INFO}
-            promptConfig={promptConfig}
-            onStartChat={handleStartChat}
-            canEditInputs={canEditInputs}
-            savedInputs={currInputs as Record<string, any>}
-            onInputsChange={setCurrInputs}
-          ></ConfigSence>
+        </div>
+      )}
 
-          {
-            hasSetInputs && (
-              <div className='relative grow pc:w-[794px] max-w-full mobile:w-full pb-[180px] mx-auto mb-3.5' ref={chatListDomRef}>
-                <Chat
-                  chatList={chatList}
-                  onSend={handleSend}
-                  onFeedback={handleFeedback}
-                  isResponding={isResponding}
-                  checkCanSend={checkCanSend}
-                  visionConfig={visionConfig}
-                  fileConfig={fileConfig}
-                />
-              </div>)
-          }
+      {!isMobile && (
+        <div className={`shrink-0 flex flex-col p-1 pr-0 transition-all duration-200 ${sidebarOpen ? 'w-[236px]' : 'w-0 overflow-hidden p-0'}`}>
+          <div className="flex-1 rounded-xl bg-gradient-to-b from-[#222225E6] to-[#1D1D20E6] border border-dify-border-section overflow-hidden">
+            <Sidebar list={conversationList} onCurrentIdChange={handleConversationIdChange} currentId={currConversationId} />
+          </div>
+        </div>
+      )}
+
+      {/* Main */}
+      <div className="relative grow p-2 min-w-0">
+        <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-dify-border-section bg-gradient-to-b from-[#222225E6] to-[#1D1D20E6]">
+          {/* Top bar */}
+          <div className="shrink-0 flex items-center h-12 px-4 border-b border-dify-border-section gap-3">
+            <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-1.5 rounded-md text-dify-text-tertiary hover:text-dify-text-secondary hover:bg-dify-hover transition-colors shrink-0">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
+            </button>
+            <div className="flex items-center gap-1">
+              <button onClick={() => { setActiveTab('chat'); if (isMobile) { setSidebarOpen(false) } }} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${activeTab === 'chat' ? 'bg-dify-hover text-dify-text-primary' : 'text-dify-text-tertiary hover:text-dify-text-secondary'}`}>Chat</button>
+              <button onClick={() => setActiveTab('documents')} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${activeTab === 'documents' ? 'bg-dify-hover text-dify-text-primary' : 'text-dify-text-tertiary hover:text-dify-text-secondary'}`}>Documents</button>
+            </div>
+            <div className="flex-1" />
+            <div className="text-sm font-semibold text-dify-text-secondary">CTC RAG</div>
+          </div>
+
+          {/* Content */}
+          <div className="flex-1 min-h-0">
+            {activeTab === 'chat'
+              ? <Chat chatList={chatList} onSend={handleSend} onFeedback={() => {}} feedbackDisabled={true} isResponding={isResponding} visionConfig={visionConfig} fileConfig={fileConfig} />
+              : <div className="h-full overflow-y-auto px-3 sm:px-8 py-4 sm:py-6"><DocumentManagement /></div>
+            }
+          </div>
         </div>
       </div>
     </div>

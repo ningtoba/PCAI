@@ -1,5 +1,5 @@
 import type { FC } from 'react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import Loading02 from '@/app/components/base/icons/line/loading-02'
 import XClose from '@/app/components/base/icons/line/x-close'
@@ -25,16 +25,20 @@ const ImageList: FC<ImageListProps> = ({
   onRemove,
   onReUpload,
   onImageLinkLoadSuccess,
-  onImageLinkLoadError,
+  onImageLinkLoadError: _onImageLinkLoadError,
 }) => {
   const { t } = useTranslation()
   const [imagePreviewUrl, setImagePreviewUrl] = useState('')
+  const failedRemoteRef = useRef<Set<string>>(new Set())
+  const [, forceUpdate] = useState(0)
 
   const handleImageLinkLoadSuccess = (item: ImageFile) => {
+    failedRemoteRef.current.delete(item._id)
     if (item.type === TransferMethod.remote_url && onImageLinkLoadSuccess && item.progress !== -1) { onImageLinkLoadSuccess(item._id) }
   }
   const handleImageLinkLoadError = (item: ImageFile) => {
-    if (item.type === TransferMethod.remote_url && onImageLinkLoadError) { onImageLinkLoadError(item._id) }
+    failedRemoteRef.current.add(item._id)
+    forceUpdate(n => n + 1)
   }
 
   return (
@@ -88,13 +92,18 @@ const ImageList: FC<ImageListProps> = ({
               )
             }
             <img
-              className='w-16 h-16 rounded-lg object-cover cursor-pointer border-[0.5px] border-black/5'
+              className={`w-16 h-16 rounded-lg object-cover cursor-pointer border-[0.5px] border-black/5 ${item.type === TransferMethod.remote_url && failedRemoteRef.current.has(item._id) ? 'hidden' : ''}`}
               alt=''
               onLoad={() => handleImageLinkLoadSuccess(item)}
               onError={() => handleImageLinkLoadError(item)}
               src={item.type === TransferMethod.remote_url ? item.url : item.base64Url}
               onClick={() => item.progress === 100 && setImagePreviewUrl((item.type === TransferMethod.remote_url ? item.url : item.base64Url) as string)}
             />
+            {item.type === TransferMethod.remote_url && failedRemoteRef.current.has(item._id) && (
+              <div className='w-16 h-16 rounded-lg flex items-center justify-center bg-dify-hover border-[0.5px] border-black/5 cursor-pointer' onClick={() => window.open(item.url, '_blank', 'noopener,noreferrer')}>
+                <svg className='w-6 h-6 text-dify-text-tertiary' fill='none' viewBox='0 0 24 24' stroke='currentColor'><path strokeLinecap='round' strokeLinejoin='round' strokeWidth={1.5} d='M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244' /></svg>
+              </div>
+            )}
             {
               !readonly && (
                 <div

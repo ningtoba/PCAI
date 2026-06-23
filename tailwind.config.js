@@ -8,6 +8,22 @@ module.exports = {
     typography: require('./typography'),
     extend: {
       colors: {
+        dify: {
+          body: '#1D1D20',
+          default: '#222225',
+          hover: '#27272B',
+          dimmed: '#27272B',
+          input: '#2A2B30',
+          'bubble-answer': '#2A2B30',
+          'bubble-user': '#27314D',
+          border: '#3A3B40',
+          'border-section': '#27272A',
+          'text-primary': '#FBFBFC',
+          'text-secondary': '#D9D9DE',
+          'text-tertiary': 'rgba(200, 206, 218, 0.6)',
+          'text-placeholder': 'rgba(200, 206, 218, 0.3)',
+          accent: '#5289FF',
+        },
         gray: {
           50: '#F9FAFB',
           100: '#F3F4F6',
@@ -51,11 +67,8 @@ module.exports = {
       },
       screens: {
         mobile: '100px',
-        // => @media (min-width: 100px) { ... }
-        tablet: '640px', // 391
-        // => @media (min-width: 600px) { ... }
+        tablet: '640px',
         pc: '769px',
-        // => @media (min-width: 769px) { ... }
       },
     },
   },

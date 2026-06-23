@@ -8,29 +8,37 @@ import { TransferMethod } from '@/types/app'
 interface ImageLinkInputProps {
   onUpload: (imageFile: ImageFile) => void
 }
-const regex = /^(https?|ftp):\/\//
 const ImageLinkInput: FC<ImageLinkInputProps> = ({
   onUpload,
 }) => {
   const { t } = useTranslation()
   const [imageLink, setImageLink] = useState('')
 
+  const normalizeUrl = (url: string) => {
+    const trimmed = url.trim()
+    if (!trimmed) { return '' }
+    if (/^https?:\/\//i.test(trimmed)) { return trimmed }
+    if (/^ftp:\/\//i.test(trimmed)) { return trimmed }
+    return `https://${trimmed}`
+  }
+
   const handleClick = () => {
+    const url = normalizeUrl(imageLink)
     const imageFile = {
       type: TransferMethod.remote_url,
       _id: `${Date.now()}`,
       fileId: '',
-      progress: regex.test(imageLink) ? 0 : -1,
-      url: imageLink,
+      progress: url ? 100 : -1,
+      url,
     }
 
     onUpload(imageFile)
   }
 
   return (
-    <div className='flex items-center pl-1.5 pr-1 h-8 border border-gray-200 bg-white shadow-xs rounded-lg'>
+    <div className='flex items-center pl-1.5 pr-1 h-8 border border-dify-border bg-dify-input rounded-lg'>
       <input
-        className='grow mr-0.5 px-1 h-[18px] text-[13px] outline-none appearance-none'
+        className='grow mr-0.5 px-1 h-[18px] text-[13px] outline-none appearance-none bg-transparent text-dify-text-primary placeholder:text-dify-text-placeholder'
         value={imageLink}
         onChange={e => setImageLink(e.target.value)}
         placeholder={t('common.imageUploader.pasteImageLinkInputPlaceholder') || ''}

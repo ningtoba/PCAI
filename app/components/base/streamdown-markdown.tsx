@@ -10,7 +10,7 @@ interface StreamdownMarkdownProps {
 export function StreamdownMarkdown({ content, className = '' }: StreamdownMarkdownProps) {
   return (
     <div className={`streamdown-markdown ${className}`}>
-      <Streamdown>{content}</Streamdown>
+      <Streamdown shikiTheme={['github-dark', 'github-light']}>{content}</Streamdown>
     </div>
   )
 }
