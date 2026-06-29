@@ -25,7 +25,6 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # local env
-.env
 .env*.local
 
 # git
